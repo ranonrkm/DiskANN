@@ -33,6 +33,7 @@ int build_in_memory_index(const diskann::Metric& metric,
   paras.Set<unsigned>(
       "C", 750);  // maximum candidate set size during pruning procedure
   paras.Set<float>("alpha", alpha);
+  paras.Set<float>("lambda", 0.0);
   paras.Set<bool>("saturate_graph", 0);
   paras.Set<unsigned>("num_threads", num_threads);
 

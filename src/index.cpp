@@ -707,9 +707,36 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
+  float Index<T, TagT>::get_distance(const T *node_coords, const unsigned id,
+                                      const unsigned *qids, const size_t num_query) {
+    float dist = _distance->compare(_data + _aligned_dim * (size_t) id,
+                                      node_coords, (unsigned) _aligned_dim);
+    if (num_query) {
+      float dist_q = 0;
+      for (unsigned m = 0; m < num_query; m++) {
+        unsigned qid = qids[m];
+        dist_q += _distance->compare(_data + _aligned_dim * (size_t) id,
+                                      _query_data + _aligned_dim * (size_t) qid,
+                                      (unsigned) _aligned_dim);
+      }
+      dist = (1 - _lambda) * dist + _lambda * (dist_q / num_query);
+    }
+    return dist;
+  }
+
+   template<typename T, typename TagT>
   std::pair<uint32_t, uint32_t> Index<T, TagT>::iterate_to_fixed_point(
       const T *query, const unsigned Lsize,
       const std::vector<unsigned> &init_ids, InMemQueryScratch<T> *scratch,
+      bool ret_frozen, bool search_invocation) {
+    return iterate_to_fixed_point(query, Lsize, init_ids, scratch, nullptr, 0, ret_frozen, search_invocation);
+  }
+
+  template<typename T, typename TagT>
+  std::pair<uint32_t, uint32_t> Index<T, TagT>::iterate_to_fixed_point(
+      const T *query, const unsigned Lsize,
+      const std::vector<unsigned> &init_ids, InMemQueryScratch<T> *scratch,
+      const unsigned *qids, const size_t num_query,
       bool ret_frozen, bool search_invocation) {
     std::vector<Neighbor> &expanded_nodes = scratch->pool();
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
@@ -811,8 +838,9 @@ namespace diskann {
           pq_dist_lookup(pq_coord_scratch, 1, this->_num_pq_chunks, pq_dists,
                          &distance);
         else
-          distance = _distance->compare(_data + _aligned_dim * (size_t) id,
-                                        aligned_query, (unsigned) _aligned_dim);
+          // distance = _distance->compare(_data + _aligned_dim * (size_t) id,
+          //                               aligned_query, (unsigned) _aligned_dim);
+          distance = get_distance(aligned_query, id, qids, num_query);
         Neighbor nn = Neighbor(id, distance);
         best_L_nodes.insert(nn);
       }
@@ -871,9 +899,11 @@ namespace diskann {
                 sizeof(T) * _aligned_dim);
           }
 
-          dist_scratch.push_back( _distance->compare(
-              aligned_query, _data + _aligned_dim * (size_t) id,
-              (unsigned) _aligned_dim));
+          // dist_scratch.push_back( _distance->compare(
+          //     aligned_query, _data + _aligned_dim * (size_t) id,
+          //     (unsigned) _aligned_dim));
+          dist_scratch.push_back(get_distance(aligned_query, id, 
+                                              qids, num_query));
         }
       }
       cmps += id_scratch.size();
@@ -890,11 +920,20 @@ namespace diskann {
   void Index<T, TagT>::search_for_point_and_prune(
       int location, _u32 Lindex, std::vector<unsigned> &pruned_list,
       InMemQueryScratch<T> *scratch) {
+
+    search_for_point_and_prune(location, Lindex, pruned_list, scratch);
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::search_for_point_and_prune(
+      int location, _u32 Lindex, std::vector<unsigned> &pruned_list,
+      InMemQueryScratch<T> *scratch, 
+      const unsigned *qids, const size_t num_query) {
     std::vector<unsigned> init_ids;
     init_ids.emplace_back(_start);
 
     iterate_to_fixed_point(_data + _aligned_dim * location, Lindex, init_ids,
-                           scratch, true, false);
+                           scratch, qids, num_query, true, false);
 
     auto &pool = scratch->pool();
 
@@ -902,6 +941,12 @@ namespace diskann {
       if (pool[i].id == (unsigned) location) {
         pool.erase(pool.begin() + i);
         i--;
+      }
+      // revising the distances (base-base distance only)
+      else if (num_query) {
+        pool[i].distance =  _distance->compare(_data + _aligned_dim * (size_t) location,
+                                                _data + _aligned_dim * (size_t) pool[i].id,
+                                                (unsigned) _aligned_dim);
       }
     }
 
@@ -1120,6 +1165,8 @@ namespace diskann {
     _indexingRange = parameters.Get<unsigned>("R");
     _indexingMaxC = parameters.Get<unsigned>("C");
     _indexingAlpha = parameters.Get<float>("alpha");
+    // weight for query-based indexing metric
+    _lambda = parameters.Get<float>("lambda");
 
     /* visit_order is a vector that is initialized to the entire graph */
     std::vector<unsigned>          visit_order;
@@ -1158,8 +1205,13 @@ namespace diskann {
       auto scratch = manager.scratch_space();
 
       std::vector<unsigned> pruned_list;
-      search_for_point_and_prune(node, _indexingQueueSize, pruned_list,
-                                 scratch);
+      if (_use_query_for_build) {
+        search_for_point_and_prune(node, _indexingQueueSize, pruned_list,
+                                  scratch, _qids[node].data(), _qids[node].size());
+      }
+      else {
+        search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch);
+      }
       {
         LockGuard guard(_locks[node]);
         _final_graph[node].reserve(
@@ -1290,6 +1342,48 @@ namespace diskann {
     generate_frozen_point();
     link(parameters);
 
+    // populate qids
+    if (_max_nq_per_base) {
+      size_t recall_at = 10;
+      size_t Lsearch = index_L;
+      std::vector<uint32_t> query_result_ids(recall_at * _nq);
+      std::vector<float> query_result_dists(recall_at * _nq);
+      std::vector<std::vector<std::pair<float, uint32_t>>> qid_scores(_nd);
+      _qids.resize(_nd);
+      for (uint64_t i = 0; i < _nd; ++i) {
+        qid_scores[i].reserve(5 * _max_nq_per_base);
+        _qids[i].reserve(_max_nq_per_base);
+      }
+      if (num_threads_index != 0)
+        omp_set_num_threads(num_threads_index);
+#pragma omp parallel for schedule(dynamic, 1)
+      for (uint64_t i = 0; i < _nq; i++) {
+        search(_query_data + i * _aligned_dim, recall_at, Lsearch,
+              query_result_ids.data() + i * recall_at,
+              query_result_dists.data() + i * recall_at);
+      }
+      
+      for (uint64_t i = 0; i < _nq; i++) {
+        for (uint64_t j = 0; j < recall_at; j++) {
+          uint32_t id = query_result_ids[i * recall_at + j];
+          float dist = query_result_dists[i * recall_at + j];
+          qid_scores[id].emplace_back(std::make_pair(dist, (uint32_t) i));
+        }
+      } 
+
+  // #pragma omp parallel for schedule(dynamic, 1)
+      for (uint64_t i = 0; i < _nd; i++) {
+        std::sort(qid_scores[i].begin(), qid_scores[i].end());
+        size_t num_query_per_base = std::min(_max_nq_per_base ,_qids[i].size());
+        for (uint64_t j = 0; j < num_query_per_base; j++) {
+          _qids[i].emplace_back(qid_scores[i][j].second);
+        }
+      }
+
+      // round 2
+      link(parameters);
+    }
+
     size_t max = 0, min = SIZE_MAX, total = 0, cnt = 0;
     for (size_t i = 0; i < _nd; i++) {
       auto &pool = _final_graph[i];
@@ -1310,7 +1404,9 @@ namespace diskann {
   template<typename T, typename TagT>
   void Index<T, TagT>::build(const T *data, const size_t num_points_to_load,
                              Parameters              &parameters,
-                             const std::vector<TagT> &tags) {
+                             const std::vector<TagT> &tags,
+                             const T                 *query_data, 
+                             const size_t             max_num_query_per_base) {
     if (num_points_to_load == 0) {
       throw ANNException("Do not call build with 0 points", -1, __FUNCSIG__,
                          __FILE__, __LINE__);
@@ -1343,7 +1439,9 @@ namespace diskann {
   void Index<T, TagT>::build(const char              *filename,
                              const size_t             num_points_to_load,
                              Parameters              &parameters,
-                             const std::vector<TagT> &tags) {
+                             const std::vector<TagT> &tags,
+                             const char              *query_filename,
+                             const size_t             max_num_query_per_base) {
     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
     if (num_points_to_load == 0)
       throw ANNException("Do not call build with 0 points", -1, __FUNCSIG__,
@@ -1437,18 +1535,65 @@ namespace diskann {
 
     diskann::cout << "Using only first " << num_points_to_load
                   << " from file.. " << std::endl;
+    
+    // load query data
+    size_t query_file_num_points = 0, query_file_dim, max_nq_per_base = 0;
+    if (max_num_query_per_base == 0) {
+      std::cout << "0 query points are requested to be loaded. " 
+                << "Continuing with no query information used." << std::endl;
+      aligned_free(_query_data);
+    }
+
+    else if (!file_exists(query_filename)) {
+      std::cout << "ERROR: Query data file " << query_filename << "does not exist. " 
+               << "Continuing with no query information used. " << std::endl;
+      aligned_free(_query_data);
+    }
+
+    else if (query_filename == nullptr){
+      std::cout << "Can not load query data from empty file."
+                << " Continuing with no query information used. " << std::endl;
+      aligned_free(_query_data);
+    }
+
+    else {
+      diskann::get_bin_metadata(query_filename, query_file_num_points, query_file_dim);
+      
+      if (query_file_dim != _dim) {
+        std::cout << "ERROR: Query file dim does not match. "
+                  << "Continuing with no query information used. " << std::endl;
+        aligned_free(_query_data);
+      }
+
+      else {
+        copy_aligned_data_from_file<T>(query_filename, _query_data, query_file_num_points,
+                                       query_file_dim, _aligned_dim);   
+                                
+        if (_normalize_vecs) {
+          for (uint64_t i = 0; i < query_file_num_points; i++) {
+            normalize(_query_data + _aligned_dim * i, _aligned_dim);
+          }
+        }
+        max_nq_per_base = max_num_query_per_base;
+      }
+    }
 
     {
       std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
       _nd = num_points_to_load;
+      _nq = query_file_num_points;
+      _max_nq_per_base = max_nq_per_base;
+      _use_query_for_build = (_max_nq_per_base > 0 && _nq > 0);
     }
+
     build_with_data_populated(parameters, tags);
   }
 
   template<typename T, typename TagT>
   void Index<T, TagT>::build(const char  *filename,
                              const size_t num_points_to_load,
-                             Parameters &parameters, const char *tag_filename) {
+                             Parameters &parameters, const char *tag_filename,
+                             const char *query_filename, const size_t max_num_query_per_base) {
     std::vector<TagT> tags;
 
     if (_enable_tags) {
@@ -1482,7 +1627,7 @@ namespace diskann {
         }
       }
     }
-    build(filename, num_points_to_load, parameters, tags);
+    build(filename, num_points_to_load, parameters, tags, query_filename, max_num_query_per_base);
   }
 
   template<typename T, typename TagT>
@@ -1517,7 +1662,7 @@ namespace diskann {
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
 
     size_t pos = 0;
-    for (int i = 0; i < best_L_nodes.size(); ++i) {
+    for (int64_t i = 0; i < best_L_nodes.size(); ++i) {
       if (best_L_nodes[i].id < _max_points) {
         // safe because Index uses uint32_t ids internally 
         // and IDType will be uint32_t or uint64_t

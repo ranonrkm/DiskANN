@@ -116,18 +116,23 @@ namespace diskann {
     DISKANN_DLLEXPORT void build(
         const char *filename, const size_t num_points_to_load,
         Parameters              &parameters,
-        const std::vector<TagT> &tags = std::vector<TagT>());
+        const std::vector<TagT> &tags = std::vector<TagT>(),
+        const char *query_filename = nullptr, const size_t max_num_query_per_base = 0);
 
     // Batch build from a file. Optionally pass tags file.
     DISKANN_DLLEXPORT void build(const char  *filename,
                                  const size_t num_points_to_load,
                                  Parameters  &parameters,
-                                 const char  *tag_filename);
+                                 const char  *tag_filename,
+                                 const char  *query_filename = nullptr,
+                                 const size_t max_num_query_per_base = 0);
 
     // Batch build from a data array, which must pad vectors to aligned_dim
     DISKANN_DLLEXPORT void build(const T *data, const size_t num_points_to_load,
                                  Parameters              &parameters,
-                                 const std::vector<TagT> &tags);
+                                 const std::vector<TagT> &tags,
+                                 const T *query_data = nullptr,
+                                 const size_t max_num_query_per_base = 0);
 
     // Set starting point of an index before inserting any points incrementally
     DISKANN_DLLEXPORT void set_start_point(T *data);
@@ -223,14 +228,28 @@ namespace diskann {
     // determines navigating node of the graph by calculating medoid of datafopt
     unsigned calculate_entry_point();
 
+    float get_distance(const T *node_coords, const unsigned j,
+                        const unsigned *qids, const size_t num_query);
+
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(
         const T *node_coords, const unsigned Lindex,
         const std::vector<unsigned> &init_ids, InMemQueryScratch<T> *scratch,
         bool ret_frozen = true, bool search_invocation = false);
 
+    std::pair<uint32_t, uint32_t> iterate_to_fixed_point(
+        const T *node_coords, const unsigned Lindex,
+        const std::vector<unsigned> &init_ids, InMemQueryScratch<T> *scratch,
+        const unsigned *qids, const size_t num_query,
+        bool ret_frozen = true, bool search_invocation = false);
+
     void search_for_point_and_prune(int location, _u32 Lindex,
                                     std::vector<unsigned> &pruned_list,
                                     InMemQueryScratch<T>  *scratch);
+
+    void search_for_point_and_prune(int location, _u32 Lindex,
+                                    std::vector<unsigned> &pruned_list,
+                                    InMemQueryScratch<T>  *scratch,
+                                    const unsigned *qids, const size_t num_query);
 
     void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool,
                          std::vector<unsigned> &pruned_list,
@@ -318,8 +337,13 @@ namespace diskann {
     T    *_data = nullptr;
     char *_opt_graph = nullptr;
 
+    // Query data
+    T   *_query_data = nullptr;
+
     // Graph related data structures
     std::vector<std::vector<unsigned>> _final_graph;
+    // lid->qid map for query-based graph building
+    std::vector<std::vector<unsigned>> _qids;
 
     // Dimensions
     size_t _dim = 0;
@@ -331,6 +355,7 @@ namespace diskann {
     size_t _node_size;
     size_t _data_len;
     size_t _neighbor_len;
+    size_t _nq = 0; // number of query points used to build graph
 
     unsigned _max_observed_degree = 0;
     unsigned _start = 0;
@@ -348,6 +373,9 @@ namespace diskann {
     uint32_t _indexingMaxC;
     float    _indexingAlpha;
     uint32_t _search_queue_size;
+    float    _lambda = 0.0;
+    size_t   _max_nq_per_base = 0;
+    bool     _use_query_for_build = false;
 
     // Query scratch data structures
     ConcurrentQueue<InMemQueryScratch<T> *> _query_scratch;
