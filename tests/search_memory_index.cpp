@@ -117,6 +117,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
     }
 
     query_result_ids[test_id].resize(recall_at * query_num);
+    query_result_dists[test_id].resize(recall_at * query_num);
     std::vector<T*> res = std::vector<T*>();
 
     auto s = std::chrono::high_resolution_clock::now();
@@ -140,7 +141,8 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
         cmp_stats[i] =
             index
                 .search(query + i * query_aligned_dim, recall_at, L,
-                        query_result_ids[test_id].data() + i * recall_at)
+                        query_result_ids[test_id].data() + i * recall_at,
+                        query_result_dists[test_id].data() + i * recall_at)
                 .second;
       }
       auto qe = std::chrono::high_resolution_clock::now();
@@ -203,6 +205,10 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
     std::string cur_result_path =
         result_path_prefix + "_" + std::to_string(L) + "_idx_uint32.bin";
     diskann::save_bin<_u32>(cur_result_path, query_result_ids[test_id].data(),
+                            query_num, recall_at);
+    cur_result_path =
+        result_path_prefix + "_scr_" + std::to_string(L) + "_idx_uint32.bin";
+    diskann::save_bin<float>(cur_result_path, query_result_dists[test_id].data(),
                             query_num, recall_at);
     test_id++;
   }
