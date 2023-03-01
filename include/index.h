@@ -249,7 +249,7 @@ namespace diskann {
         const std::vector<unsigned> &init_ids, InMemQueryScratch<T> *scratch,
         bool ret_frozen = true, bool search_invocation = false);
 
-    std::pair<uint32_t, uint32_t> iterate_to_fixed_point(
+    std::pair<uint32_t, uint32_t> iterate_to_fixed_point_with_query(
         const T *node_coords, const unsigned Lindex,
         const std::vector<unsigned> &init_ids, InMemQueryScratch<T> *scratch,
         const unsigned *qids, const size_t num_query,

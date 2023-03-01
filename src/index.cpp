@@ -726,12 +726,185 @@ namespace diskann {
       const T *query, const unsigned Lsize,
       const std::vector<unsigned> &init_ids, InMemQueryScratch<T> *scratch,
       bool ret_frozen, bool search_invocation) {
-    iterate_to_fixed_point(query, Lsize, init_ids, scratch, nullptr, 0, 
-                            ret_frozen, search_invocation);
+    // iterate_to_fixed_point_with_query(query, Lsize, init_ids, scratch, nullptr, 0, 
+    //                         ret_frozen, search_invocation);
+    std::vector<Neighbor> &expanded_nodes = scratch->pool();
+    NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
+    best_L_nodes.reserve(Lsize);
+    tsl::robin_set<unsigned> &inserted_into_pool_rs =
+        scratch->inserted_into_pool_rs();
+    boost::dynamic_bitset<> &inserted_into_pool_bs =
+        scratch->inserted_into_pool_bs();
+    std::vector<unsigned> &id_scratch = scratch->id_scratch();
+    std::vector<float> &dist_scratch = scratch->dist_scratch();
+    assert(id_scratch.size() == 0);
+    T *aligned_query = scratch->aligned_query();
+    memcpy(aligned_query, query, _dim * sizeof(T));
+    if (_normalize_vecs) {
+      normalize((float *) aligned_query, _dim);
+    }
+
+    float *query_float;
+    float *query_rotated;
+    float *pq_dists;
+    _u8   *pq_coord_scratch;
+    // Intialize PQ related scratch to use PQ based distances
+    if (_pq_dist) {
+      // Get scratch spaces
+      PQScratch<T> *pq_query_scratch = scratch->pq_scratch();
+      query_float = pq_query_scratch->aligned_query_float;
+      query_rotated = pq_query_scratch->rotated_query;
+      pq_dists = pq_query_scratch->aligned_pqtable_dist_scratch;
+
+      // Copy query vector to float and then to "rotated" query
+      for (size_t d = 0; d < _dim; d++) {
+        query_float[d] = (float) aligned_query[d];
+      }
+      pq_query_scratch->set(_dim, aligned_query);
+
+      // center the query and rotate if we have a rotation matrix
+      _pq_table.preprocess_query(query_rotated);
+      _pq_table.populate_chunk_distances(query_rotated, pq_dists);
+
+      pq_coord_scratch = pq_query_scratch->aligned_pq_coord_scratch;
+    }
+
+    if (expanded_nodes.size() > 0 || id_scratch.size() > 0) {
+      throw ANNException("ERROR: Clear scratch space before passing.", -1,
+                         __FUNCSIG__, __FILE__, __LINE__);
+    }
+
+    // Decide whether to use bitset or robin set to mark visited nodes
+    auto total_num_points = _max_points + _num_frozen_pts;
+    bool fast_iterate = total_num_points <= MAX_POINTS_FOR_USING_BITSET;
+
+    if (fast_iterate) {
+      if (inserted_into_pool_bs.size() < total_num_points) {
+        // hopefully using 2X will reduce the number of allocations.
+        auto resize_size = 2 * total_num_points > MAX_POINTS_FOR_USING_BITSET
+                               ? MAX_POINTS_FOR_USING_BITSET
+                               : 2 * total_num_points;
+        inserted_into_pool_bs.resize(resize_size);
+      }
+    }
+
+    // Lambda to determine if a node has been visited
+    auto is_not_visited = [this, fast_iterate, &inserted_into_pool_bs,
+                           &inserted_into_pool_rs](const unsigned id) {
+      return fast_iterate ? inserted_into_pool_bs[id] == 0
+                          : inserted_into_pool_rs.find(id) ==
+                                inserted_into_pool_rs.end();
+    };
+
+    // Lambda to batch compute query<-> node distances in PQ space
+    auto compute_dists = [this, pq_coord_scratch, pq_dists](
+                             const std::vector<unsigned> &ids,
+                             std::vector<float>          &dists_out) {
+      diskann::aggregate_coords(ids, this->_pq_data, this->_num_pq_chunks,
+                                pq_coord_scratch);
+      diskann::pq_dist_lookup(pq_coord_scratch, ids.size(),
+                              this->_num_pq_chunks, pq_dists, dists_out);
+    };
+
+    // Initialize the candidate pool with starting points
+    for (auto id : init_ids) {
+      if (id >= _max_points + _num_frozen_pts) {
+        diskann::cerr << "Out of range loc found as an edge : " << id
+                      << std::endl;
+        throw diskann::ANNException(
+            std::string("Wrong loc") + std::to_string(id), -1, __FUNCSIG__,
+            __FILE__, __LINE__);
+      }
+
+      if (is_not_visited(id)) {
+        if (fast_iterate) {
+          inserted_into_pool_bs[id] = 1;
+        } else {
+          inserted_into_pool_rs.insert(id);
+        }
+
+        float distance;
+        if (_pq_dist)
+          pq_dist_lookup(pq_coord_scratch, 1, this->_num_pq_chunks, pq_dists,
+                         &distance);
+        else
+          distance = _distance->compare(_data + _aligned_dim * (size_t) id,
+                                        aligned_query, (unsigned) _aligned_dim);
+        Neighbor nn = Neighbor(id, distance);
+        best_L_nodes.insert(nn);
+      }
+    }
+
+    uint32_t hops = 0;
+    uint32_t cmps = 0;
+
+    while (best_L_nodes.has_unexpanded_node()) {
+      auto nbr = best_L_nodes.closest_unexpanded();   
+      auto n = nbr.id;
+      // Add node to expanded nodes to create pool for prune later
+      if (!search_invocation &&
+          (n != _start || _num_frozen_pts == 0 || ret_frozen)) {
+        expanded_nodes.emplace_back(nbr);
+      }
+      // Find which of the nodes in des have not been visited before
+      id_scratch.clear();
+      dist_scratch.clear();
+      {
+        if (_dynamic_index)
+          _locks[n].lock();
+        for (auto id : _final_graph[n]) {
+          assert(id < _max_points + _num_frozen_pts);
+          if (is_not_visited(id)) {
+            id_scratch.push_back(id);
+          }
+        }
+
+        if (_dynamic_index)
+          _locks[n].unlock();
+      }
+
+      // Mark nodes visited
+      for (auto id : id_scratch) {
+        if (fast_iterate) {
+          inserted_into_pool_bs[id] = 1;
+        } else {
+          inserted_into_pool_rs.insert(id);
+        }
+      }
+
+      // Compute distances to unvisited nodes in the expansion
+      if (_pq_dist) {
+        assert(dist_scratch.capacity() >= id_scratch.size());
+        compute_dists(id_scratch, dist_scratch);
+      } else {
+        assert(dist_scratch.size() == 0);
+        for (size_t m = 0; m < id_scratch.size(); ++m) {
+          unsigned id = id_scratch[m];
+
+          if (m + 1 < id_scratch.size()) {
+            auto nextn = id_scratch[m + 1];
+            diskann::prefetch_vector(
+                (const char *) _data + _aligned_dim * (size_t) nextn,
+                sizeof(T) * _aligned_dim);
+          }
+
+          dist_scratch.push_back( _distance->compare(
+              aligned_query, _data + _aligned_dim * (size_t) id,
+              (unsigned) _aligned_dim));
+        }
+      }
+      cmps += id_scratch.size();
+
+      // Insert <id, dist> pairs into the pool of candidates
+      for (size_t m = 0; m < id_scratch.size(); ++m) {
+        best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
+      }
+    }
+    return std::make_pair(hops, cmps);
   }
 
   template<typename T, typename TagT>
-  std::pair<uint32_t, uint32_t> Index<T, TagT>::iterate_to_fixed_point(
+  std::pair<uint32_t, uint32_t> Index<T, TagT>::iterate_to_fixed_point_with_query(
       const T *query, const unsigned Lsize,
       const std::vector<unsigned> &init_ids, InMemQueryScratch<T> *scratch,
       const unsigned *qids, const size_t num_query,
@@ -923,7 +1096,7 @@ namespace diskann {
     std::vector<unsigned> init_ids;
     init_ids.emplace_back(_start);
 
-    iterate_to_fixed_point(_data + _aligned_dim * location, Lindex, init_ids,
+    iterate_to_fixed_point_with_query(_data + _aligned_dim * location, Lindex, init_ids,
                            scratch, qids, num_query, true, false);
 
     auto &pool = scratch->pool();
