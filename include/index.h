@@ -67,6 +67,10 @@ namespace diskann {
         const T *query, const uint64_t K, const unsigned L,
         std::vector<unsigned> init_ids, uint64_t *indices, float *distances);
 
+    DISKANN_DLLEXPORT void search_with_adj_lookup(
+        const T *query, const std::vector<unsigned> &ref_ids,
+        const uint64_t K, unsigned* indices, float* distances);
+
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_tags(
         const T *query, const size_t K, const unsigned L, TagT *tags,
         unsigned frozen_pts, unsigned *indices_buffer = NULL);

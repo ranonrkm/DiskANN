@@ -1297,6 +1297,60 @@ namespace diskann {
     return retval;
   }
 
+  struct compare_nbr {
+    bool operator()(const Neighbor& a, const Neighbor& b) {
+      return a < b;
+    }
+  };
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::search_with_adj_lookup(
+      const T *query, const std::vector<unsigned> &ref_ids, const uint64_t K,
+      unsigned *indices, float *distances) {
+    std::priority_queue<Neighbor, std::vector<Neighbor>, compare_nbr> shortlist;
+    tsl::robin_set<unsigned> inserted_into_pool;
+    size_t num_ref = ref_ids.size();
+    unsigned fill_ind = std::numeric_limits<unsigned>::max();
+    float    fill_dist = std::numeric_limits<float>::max();
+    for (int i = 0; i < (int) num_ref; i++) {
+      unsigned n = ref_ids[i];
+      for (unsigned m = 0; m < _final_graph[n].size(); m++) {
+        unsigned id = _final_graph[n][m];
+        if (inserted_into_pool.find(id) == inserted_into_pool.end()) {
+          inserted_into_pool.insert(id);
+
+          if ((m + 1) < _final_graph[n].size()) {
+            auto nextn = _final_graph[n][m + 1];
+            diskann::prefetch_vector(
+                (const char *) _data + _aligned_dim * (size_t) nextn,
+                sizeof(T) * _aligned_dim);
+          }
+
+          float dist = _distance->compare(query,
+                                          _data + _aligned_dim * (size_t) id,
+                                          (unsigned) _aligned_dim);
+          
+          if (shortlist.size() == K && dist < shortlist.top().distance)
+            shortlist.pop();
+          
+          if (shortlist.size() < K)
+            shortlist.push(Neighbor(id, dist, true));
+        }
+      }
+    }
+    size_t pos = K-1, num_final_ids = std::min(K, shortlist.size());
+    while (pos >= num_final_ids) {
+      indices[pos] = fill_ind;
+      distances[pos--] = fill_dist;
+    }
+    while (!shortlist.empty()) {
+      auto p = shortlist.top();
+      shortlist.pop();
+      indices[pos] = p.id;
+      distances[pos--] = p.distance;
+    }
+  }
+
   template<typename T, typename TagT>
   std::pair<uint32_t, uint32_t> Index<T, TagT>::search_with_tags(
       const T *query, const size_t K, const unsigned L, TagT *tags,

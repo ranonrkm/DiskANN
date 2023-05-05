@@ -322,5 +322,42 @@ PYBIND11_MODULE(vamanapy, m) {
         }
         return ids;
       }, py::arg("queries"), py::arg("knn") = 10, py::arg("num_queries"),
-      py::arg("l_search"));
+      py::arg("l_search"))
+    .def("batch_numpy_query_adj_lookup", [](Index<float, int> &self,
+                                 py::array_t<float,
+                                             py::array::c_style |
+                                             py::array::forcecast> &queries,
+                                 py::array_t<unsigned> &indices,
+                                 py::array_t<unsigned> &indptr,
+                                 const size_t knn,
+                                 const size_t num_queries,
+                                 const size_t num_pos) {
+        py::array_t<unsigned> ids(knn * num_queries);
+        py::array_t<float>    dists(knn * num_queries);
+        std::random_device    device;
+        std::mt19937          generator(device());
+        // auto indices_buff = indices.unchecked<1>();
+        auto indptr_buff = indptr.unchecked<1>();
+        #pragma omp parallel for schedule(dynamic, 1)
+        for (uint64_t i = 0; i < num_queries; i++) {
+          unsigned start = indptr_buff(i), end = indptr_buff(i + 1);
+          size_t len = end - start;
+          std::vector<unsigned> curr_ind(indices.data(start), indices.data(start)+len);
+          if (len >= num_pos) {
+            // sample if too many positives are there
+            std::vector<unsigned> samples(num_pos);
+            std::uniform_int_distribution<> dis(0, curr_ind.size() - 1);
+            for (auto& x : samples)
+              x = curr_ind[dis(generator)];
+            self.search_with_adj_lookup(queries.data(i), samples, knn, 
+                                        ids.mutable_data(i * knn), dists.mutable_data(i * knn));
+          }
+          else {
+            self.search_with_adj_lookup(queries.data(i), curr_ind, knn,
+                                        ids.mutable_data(i * knn), dists.mutable_data(i * knn));
+          }
+        }
+        return ids;            
+      }, py::arg("queries"), py::arg("indices"), py::arg("indptr"), 
+      py::arg("knn"), py::arg("num_queries"), py::arg("num_pos"));
 }
