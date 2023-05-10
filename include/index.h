@@ -147,6 +147,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(const T *query, const size_t K, const uint32_t L,
                                                            IDType *indices, float *distances = nullptr);
 
+    template <typename IDType>
+    DISKANN_DLLEXPORT uint32_t search_with_adj_lookup(const T *query, 
+                                                     const std::vector<uint32_t> &ref_ids, const size_t K,
+                                                     IDType *indices, float *distances = nullptr);
+
     // Initialize space for res_vectors before calling.
     DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K, const uint32_t L, TagT *tags,
                                               float *distances, std::vector<T *> &res_vectors);
@@ -232,6 +237,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Returns the locations of start point and frozen points suitable for use
     // with iterate_to_fixed_point.
     std::vector<uint32_t> get_init_ids();
+
+    uint32_t lookup_adj_nodes(const T *query, const std::vector<uint32_t> &ref_ids, InMemQueryScratch<T> *scratch, const size_t K);
 
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(const T *node_coords, const uint32_t Lindex,
                                                          const std::vector<uint32_t> &init_ids,

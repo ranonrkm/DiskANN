@@ -838,6 +838,99 @@ template <typename T, typename TagT, typename LabelT> std::vector<uint32_t> Inde
 }
 
 template <typename T, typename TagT, typename LabelT>
+uint32_t Index<T, TagT, LabelT>::lookup_adj_nodes(
+    const T *query, const std::vector<uint32_t> &ref_ids, InMemQueryScratch<T> *scratch, const size_t K) 
+{
+    NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
+    best_L_nodes.reserve(K + 1);
+    tsl::robin_set<uint32_t> &inserted_into_pool_rs = scratch->inserted_into_pool_rs();
+    boost::dynamic_bitset<> &inserted_into_pool_bs = scratch->inserted_into_pool_bs();
+    std::vector<uint32_t> &id_scratch = scratch->id_scratch();
+    std::vector<float> &dist_scratch = scratch->dist_scratch();
+    assert (id_scratch.size() == 0);
+
+    T *aligned_query = scratch->aligned_query();
+
+    // Decide whether to use bitset or robin set to mark visited nodes
+    auto total_num_points = _max_points + _num_frozen_pts;
+    bool fast_iterate = total_num_points <= MAX_POINTS_FOR_USING_BITSET;
+
+    if (fast_iterate)
+    {
+        if (inserted_into_pool_bs.size() < total_num_points)
+        {
+            // hopefully using 2X will reduce the number of allocations.
+            auto resize_size =
+                2 * total_num_points > MAX_POINTS_FOR_USING_BITSET ? MAX_POINTS_FOR_USING_BITSET : 2 * total_num_points;
+            inserted_into_pool_bs.resize(resize_size);
+        }
+    }
+
+    // Lambda to determine if a node has been visited
+    auto is_not_visited = [this, fast_iterate, &inserted_into_pool_bs, &inserted_into_pool_rs](const uint32_t id) {
+        return fast_iterate ? inserted_into_pool_bs[id] == 0
+                            : inserted_into_pool_rs.find(id) == inserted_into_pool_rs.end();
+    };
+
+    uint32_t cmps = 0;
+
+    for (auto n : ref_ids) 
+    {
+        id_scratch.clear();
+        dist_scratch.clear();
+        {
+            if (_dynamic_index)
+                _locks[n].lock();
+            for (auto id : _final_graph[n])
+            {
+                assert (id < _max_points + _num_frozen_pts);
+
+                if (is_not_visited(id)) {
+                    id_scratch.push_back(id);
+                }
+            }
+            if (_dynamic_index)
+                _locks[n].unlock();
+        }
+
+        // Mark nodes visited
+        for (auto id : id_scratch)
+        {
+            if (fast_iterate)
+                inserted_into_pool_bs[id] = 1;
+            else
+                inserted_into_pool_rs.insert(id);
+        }
+
+        // Compute distances to unvisited nodes in the expansion
+        assert(dist_scratch.size() == 0);
+        for (size_t m = 0; m < id_scratch.size(); ++m)
+        {
+            uint32_t id = id_scratch[m];
+
+            if (m + 1 < id_scratch.size())
+            {
+                auto nextn = id_scratch[m + 1];
+                _data_store->prefetch_vector(nextn);
+            }
+
+            dist_scratch.push_back(_data_store->get_distance(aligned_query, id));
+        }
+    
+        cmps += (uint32_t)id_scratch.size();
+
+        // Insert <id, dist> pairs into the pool of candidates
+        for (size_t m = 0; m < id_scratch.size(); ++m)
+        {
+            best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
+        }
+
+    }
+    return cmps;
+}
+
+
+template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     const T *query, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, InMemQueryScratch<T> *scratch,
     bool use_filter, const std::vector<LabelT> &filter_label, bool search_invocation)
@@ -2031,6 +2124,61 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
 
 template <typename T, typename TagT, typename LabelT>
 template <typename IdType>
+uint32_t Index<T, TagT, LabelT>::search_with_adj_lookup(const T *query, 
+                                                     const std::vector<uint32_t> &ref_ids, const size_t K,
+                                                     IdType *indices, float *distances)
+{
+    ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
+    auto scratch = manager.scratch_space();
+
+    std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
+
+    _distance->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
+    auto retval = 
+        lookup_adj_nodes(scratch->aligned_query(), ref_ids, scratch, K);
+    
+    NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
+
+    size_t pos = 0;
+    for (size_t i = 0; i < best_L_nodes.size(); ++i)
+    {
+        if (best_L_nodes[i].id < _max_points)
+        {
+            // safe because Index uses uint32_t ids internally
+            // and IDType will be uint32_t or uint64_t
+            indices[pos] = (IdType)best_L_nodes[i].id;
+            if (distances != nullptr)
+            {
+#ifdef EXEC_ENV_OLS
+                // DLVS expects negative distances
+                distances[pos] = best_L_nodes[i].distance;
+#else
+                distances[pos] = _dist_metric == diskann::Metric::INNER_PRODUCT ? -1 * best_L_nodes[i].distance
+                                                                                : best_L_nodes[i].distance;
+#endif
+            }
+            pos++;
+        }
+        if (pos == K)
+            break;
+    }
+    while (pos < K)
+    {
+        indices[pos] = (IdType)_max_points;
+        if (distances != nullptr)
+        {
+            distances[pos] = _dist_metric == diskann::Metric::INNER_PRODUCT ? 
+                                                std::numeric_limits<float>::min() :
+                                                std::numeric_limits<float>::max();
+        }
+        pos++;
+    }
+
+    return retval;
+}
+
+template <typename T, typename TagT, typename LabelT>
+template <typename IdType>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const T *query, const LabelT &filter_label,
                                                                           const size_t K, const uint32_t L,
                                                                           IdType *indices, float *distances)
@@ -3116,6 +3264,20 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t,
     const int8_t *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint32_t>::search<uint32_t>(
     const int8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
+
+template DISKANN_DLLEXPORT uint32_t Index<float, uint64_t, uint32_t>::search_with_adj_lookup<uint64_t>(
+    const float *query, const std::vector<uint32_t> &ref_ids, const size_t K, uint64_t *indices, float *distances);
+template DISKANN_DLLEXPORT uint32_t Index<float, uint64_t, uint32_t>::search_with_adj_lookup<uint32_t>(
+    const float *query, const std::vector<uint32_t> &ref_ids, const size_t K, uint32_t *indices, float *distances);
+template DISKANN_DLLEXPORT uint32_t Index<uint8_t, uint64_t, uint32_t>::search_with_adj_lookup<uint64_t>(
+    const uint8_t *query, const std::vector<uint32_t> &ref_ids, const size_t K, uint64_t *indices, float *distances);
+template DISKANN_DLLEXPORT uint32_t Index<uint8_t, uint64_t, uint32_t>::search_with_adj_lookup<uint32_t>(
+    const uint8_t *query, const std::vector<uint32_t> &ref_ids, const size_t K, uint32_t *indices, float *distances);
+template DISKANN_DLLEXPORT uint32_t Index<int8_t, uint64_t, uint32_t>::search_with_adj_lookup<uint64_t>(
+    const int8_t *query, const std::vector<uint32_t> &ref_ids, const size_t K, uint64_t *indices, float *distances);
+template DISKANN_DLLEXPORT uint32_t Index<int8_t, uint64_t, uint32_t>::search_with_adj_lookup<uint32_t>(
+    const int8_t *query, const std::vector<uint32_t> &ref_ids, const size_t K, uint32_t *indices, float *distances);
+
 // TagT==uint32_t
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint32_t, uint32_t>::search<uint64_t>(
     const float *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
@@ -3129,6 +3291,19 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t,
     const int8_t *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint32_t>::search<uint32_t>(
     const int8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
+
+template DISKANN_DLLEXPORT uint32_t Index<float, uint32_t, uint32_t>::search_with_adj_lookup<uint64_t>(
+    const float *query, const std::vector<uint32_t> &ref_ids, const size_t K, uint64_t *indices, float *distances);
+template DISKANN_DLLEXPORT uint32_t Index<float, uint32_t, uint32_t>::search_with_adj_lookup<uint32_t>(
+    const float *query, const std::vector<uint32_t> &ref_ids, const size_t K, uint32_t *indices, float *distances);
+template DISKANN_DLLEXPORT uint32_t Index<uint8_t, uint32_t, uint32_t>::search_with_adj_lookup<uint64_t>(
+    const uint8_t *query, const std::vector<uint32_t> &ref_ids, const size_t K, uint64_t *indices, float *distances);
+template DISKANN_DLLEXPORT uint32_t Index<uint8_t, uint32_t, uint32_t>::search_with_adj_lookup<uint32_t>(
+    const uint8_t *query, const std::vector<uint32_t> &ref_ids, const size_t K, uint32_t *indices, float *distances);
+template DISKANN_DLLEXPORT uint32_t Index<int8_t, uint32_t, uint32_t>::search_with_adj_lookup<uint64_t>(
+    const int8_t *query, const std::vector<uint32_t> &ref_ids, const size_t K, uint64_t *indices, float *distances);
+template DISKANN_DLLEXPORT uint32_t Index<int8_t, uint32_t, uint32_t>::search_with_adj_lookup<uint32_t>(
+    const int8_t *query, const std::vector<uint32_t> &ref_ids, const size_t K, uint32_t *indices, float *distances);
 
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint32_t>::search_with_filters<
     uint64_t>(const float *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
