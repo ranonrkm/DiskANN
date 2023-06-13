@@ -842,7 +842,6 @@ uint32_t Index<T, TagT, LabelT>::lookup_adj_nodes(
     const T *query, const std::vector<uint32_t> &ref_ids, InMemQueryScratch<T> *scratch, const size_t K) 
 {
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
-    best_L_nodes.reserve(K + 1);
     tsl::robin_set<uint32_t> &inserted_into_pool_rs = scratch->inserted_into_pool_rs();
     boost::dynamic_bitset<> &inserted_into_pool_bs = scratch->inserted_into_pool_bs();
     std::vector<uint32_t> &id_scratch = scratch->id_scratch();
@@ -2130,6 +2129,14 @@ uint32_t Index<T, TagT, LabelT>::search_with_adj_lookup(const T *query,
 {
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto scratch = manager.scratch_space();
+
+    if (K > scratch->get_L())
+    {
+        diskann::cout << "Attempting to expand query scratch_space. Was created "
+                      << "with Lsize: " << scratch->get_L() << " but search L is: " << K << std::endl;
+        scratch->resize_for_new_L(K);
+        diskann::cout << "Resize completed. New scratch->L is " << scratch->get_L() << std::endl;
+    }
 
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
 

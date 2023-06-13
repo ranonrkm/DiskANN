@@ -16,6 +16,9 @@ target_link_libraries(search_memory_index ${PROJECT_NAME} ${DISKANN_ASYNC_LIB} $
 add_executable(search_memory_index_adj_lookup search_memory_index_adj_lookup.cpp)
 target_link_libraries(search_memory_index_adj_lookup ${PROJECT_NAME} ${DISKANN_ASYNC_LIB} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::program_options)
 
+add_executable(build_and_search_memory_index build_and_search_memory_index.cpp)
+target_link_libraries(build_and_search_memory_index ${PROJECT_NAME} ${DISKANN_ASYNC_LIB} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::program_options)
+
 add_executable(build_disk_index build_disk_index.cpp)
 target_link_libraries(build_disk_index ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} ${DISKANN_ASYNC_LIB} Boost::program_options)
 

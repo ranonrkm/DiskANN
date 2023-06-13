@@ -151,11 +151,6 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     uint64_t test_id = 0;
     for (auto L : num_pos)
     {
-        if (L < recall_at)
-        {
-            diskann::cout << "Ignoring search with L:" << L << " since it's smaller than K:" << recall_at << std::endl;
-            continue;
-        }
         std::string cur_result_path = result_path_prefix + "_" + std::to_string(L) + "_idx_uint32.bin";
         diskann::save_bin<uint32_t>(cur_result_path, query_result_ids[test_id].data(), query_num, recall_at);
         test_id++;
