@@ -9,6 +9,8 @@
 #include "types.h"
 #include "windows_customizations.h"
 
+#include "neighbor.h"
+
 namespace diskann
 {
 
@@ -42,6 +44,10 @@ template <typename data_t> class AbstractDataStore
     // useful for bulk or static index building.
     virtual void populate_data(const data_t *vectors, const location_t num_pts) = 0;
     virtual void populate_data(const std::string &filename, const size_t offset) = 0;
+    virtual void populate_query_data_for_ood_build(const std::string &query_filename,
+                                                   const std::string &qids_filename, 
+                                                   const size_t max_nq_per_node,
+                                                   const float ood_lambda) = 0;
 
     // save the first num_pts many vectors back to bin file
     // note: cannot undo the pre-processing done in populate data
@@ -81,6 +87,9 @@ template <typename data_t> class AbstractDataStore
     virtual void get_distance(const data_t *query, const location_t *locations, const uint32_t location_count,
                               float *distances) const = 0;
     virtual float get_distance(const location_t loc1, const location_t loc2) const = 0;
+    virtual float get_distance(const data_t *query, const location_t loc1, const location_t loc2) const = 0;
+
+    virtual void revise_distances(const location_t &loc, std::vector<Neighbor> &pool) = 0;
 
     // stats of the data stored in store
     // Returns the point in the dataset that is closest to the mean of all points

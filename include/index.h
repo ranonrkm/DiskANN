@@ -109,8 +109,19 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                  const IndexWriteParameters &parameters,
                                  const std::vector<TagT> &tags = std::vector<TagT>());
 
+    DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
+                                 const char *query_filename, const size_t num_query_points_to_load,
+                                 const char *qids_filename, const size_t max_nq_per_node,
+                                 const IndexWriteParameters &parameters,
+                                 const std::vector<TagT> &tags = std::vector<TagT>());
+
     // Batch build from a file. Optionally pass tags file.
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
+                                 const IndexWriteParameters &parameters, const char *tag_filename);
+
+    DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
+                                 const char *query_filename, const size_t num_query_points_to_load,
+                                 const char *qids_filename, const size_t max_nq_per_node,
                                  const IndexWriteParameters &parameters, const char *tag_filename);
 
     // Batch build from a data array, which must pad vectors to aligned_dim
@@ -243,11 +254,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(const T *node_coords, const uint32_t Lindex,
                                                          const std::vector<uint32_t> &init_ids,
                                                          InMemQueryScratch<T> *scratch, bool use_filter,
-                                                         const std::vector<LabelT> &filters, bool search_invocation);
+                                                         const std::vector<LabelT> &filters, bool search_invocation,
+                                                         const location_t insert_id = 0);
 
     void search_for_point_and_prune(int location, uint32_t Lindex, std::vector<uint32_t> &pruned_list,
-                                    InMemQueryScratch<T> *scratch, bool use_filter = false,
-                                    uint32_t filteredLindex = 0);
+                                    InMemQueryScratch<T> *scratch, bool use_filter = false, uint32_t filteredLindex = 0);
 
     void prune_neighbors(const uint32_t location, std::vector<Neighbor> &pool, std::vector<uint32_t> &pruned_list,
                          InMemQueryScratch<T> *scratch);
@@ -376,6 +387,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     uint32_t _indexingRange;
     uint32_t _indexingMaxC;
     float _indexingAlpha;
+    float _indexingLambda;
 
     // Query scratch data structures
     ConcurrentQueue<InMemQueryScratch<T> *> _query_scratch;
@@ -407,6 +419,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     bool _data_compacted = true;    // true if data has been compacted
     bool _is_saved = false;         // Checking if the index is already saved.
     bool _conc_consolidate = false; // use _lock while searching
+
+    bool _indexingOOD = false; // use modified metric for building graph to serve OOD queries
 
     // Acquire locks in the order below when acquiring multiple locks
     std::shared_timed_mutex // RW mutex between save/load (exclusive lock) and

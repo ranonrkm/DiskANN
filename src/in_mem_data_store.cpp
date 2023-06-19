@@ -148,6 +148,50 @@ template <typename data_t> void InMemDataStore<data_t>::populate_data(const std:
     }
 }
 
+template <typename data_t> void InMemDataStore<data_t>::populate_query_data_for_ood_build(const std::string &query_filename, 
+                                                                            const std::string &qids_filename,
+                                                                            const size_t max_nq_per_node,
+                                                                            const float ood_lambda)
+{
+    size_t npts, ndim, qids_file_num_points, qids_file_dim;
+    location_t *nnids;
+    load_aligned_bin(query_filename.c_str(), _train_query, npts, ndim, _aligned_dim);
+
+    _num_train_query = npts;
+
+    if ((location_t)ndim != this->get_dims())
+    {
+        std::stringstream ss;
+        ss << "Number of dimensions of a point in the file: " << query_filename
+           << " is not equal to dimensions of data store: " << this->capacity() << "." << std::endl;
+        throw diskann::ANNException(ss.str(), -1);
+    }
+
+    if (_distance_fn->preprocessing_required())
+    {
+        _distance_fn->preprocess_base_points(_train_query, this->_aligned_dim, npts);
+    }
+
+    // std::unique_ptr<location_t[]> nnids(new location_t[qids_file_num_points * qids_file_dim]);
+    load_bin<location_t>(qids_filename, nnids, qids_file_num_points, qids_file_dim);
+    assert (npts == qids_file_num_points);
+
+    _qids.resize(this->capacity());
+    
+    for (size_t i = 0; i < qids_file_num_points; i++)
+    {
+        for (size_t j = 0; j < qids_file_dim; j++)
+        {
+            auto id = nnids[i * qids_file_dim + j];
+            if (_qids[id].size() < max_nq_per_node)
+                _qids[id].push_back((location_t) i);
+        }
+    }
+
+    _ood_build = true;
+    _ood_lambda = ood_lambda;
+}
+
 template <typename data_t>
 void InMemDataStore<data_t>::extract_data_to_bin(const std::string &filename, const location_t num_points)
 {
@@ -195,6 +239,36 @@ float InMemDataStore<data_t>::get_distance(const location_t loc1, const location
 {
     return _distance_fn->compare(_data + loc1 * _aligned_dim, _data + loc2 * _aligned_dim,
                                  (uint32_t)this->_aligned_dim);
+}
+
+template <typename data_t>
+float InMemDataStore<data_t>::get_distance(const data_t *query, const location_t loc1, const location_t loc2) const
+{
+    float distance = _distance_fn->compare(query, _data + _aligned_dim * loc2, (uint32_t)_aligned_dim);
+    if (!_ood_build || _qids[loc1].empty()) 
+    {
+        return distance;
+    }
+    float distance_q = 0;
+    for (auto qid : _qids[loc1])
+    {
+        distance_q += _distance_fn->compare(_train_query + _aligned_dim * qid, 
+                                            _data + _aligned_dim * loc2, (uint32_t)_aligned_dim);
+    }
+    return (1 - _ood_lambda) * distance + _ood_lambda * (distance_q / _qids[loc1].size());
+}
+
+template <typename data_t>
+void InMemDataStore<data_t>::revise_distances(const location_t &loc, std::vector<Neighbor> &pool)
+{
+    if (!_ood_build || _qids[loc].empty())
+        return;
+    for (auto& p : pool)
+    {
+        auto id = p.id;
+        p.distance = _distance_fn->compare(_data + loc * _aligned_dim, _data + id * _aligned_dim,
+                                            (uint32_t)this->_aligned_dim);
+    }
 }
 
 template <typename data_t> location_t InMemDataStore<data_t>::expand(const location_t new_size)
