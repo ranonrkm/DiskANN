@@ -345,24 +345,42 @@ void build_disk_index2(const diskann::Metric metric, const std::string &data_fil
 template <typename T, typename TagT = IdT, typename LabelT = filterT>
 void build_in_memory_index(const diskann::Metric &metric, const std::string &vector_bin_path,
                            const std::string &index_output_path, const uint32_t graph_degree, const uint32_t complexity,
-                           const float alpha, const uint32_t num_threads, const bool use_pq_build,
-                           const size_t num_pq_bytes, const bool use_opq, const std::string &label_file,
-                           const std::string &universal_label, const uint32_t filter_complexity,
+                           const float alpha, const uint32_t num_threads, 
+                           const bool use_pq_build, const size_t num_pq_bytes, const bool use_opq, 
+                           const std::string &query_sample_bin_path, const std::string &query_sample_qids_path,
+                           const uint32_t max_nq_per_node, const float ood_lambda, const bool ood_build,
+                           const std::string &label_file, const std::string &universal_label, const uint32_t filter_complexity,
                            const bool use_tags = false)
 {
+    if (ood_build)
+    {
+        assert (query_sample_bin_path != "" && query_sample_qids_path != "");
+    }
     diskann::IndexWriteParameters index_build_params = diskann::IndexWriteParametersBuilder(complexity, graph_degree)
                                                            .with_filter_list_size(filter_complexity)
                                                            .with_alpha(alpha)
                                                            .with_saturate_graph(false)
+                                                           .with_ood_build(ood_build)
+                                                           .with_ood_lambda(ood_lambda)
                                                            .with_num_threads(num_threads)
                                                            .build();
-    size_t data_num, data_dim;
+    size_t data_num, data_dim, query_num, query_dim;
     diskann::get_bin_metadata(vector_bin_path, data_num, data_dim);
     diskann::Index<T, TagT, LabelT> index(metric, data_dim, data_num, false, use_tags, false, use_pq_build,
                                           num_pq_bytes, use_opq);
     if (label_file == "")
     {
-        index.build(vector_bin_path.c_str(), data_num, index_build_params);
+        if (ood_build)
+        {
+            diskann::get_bin_metadata(query_sample_bin_path, query_num, query_dim);
+            assert (query_dim == data_dim);
+            index.build_ood_index(vector_bin_path.c_str(), data_num, query_sample_bin_path.c_str(), query_num, 
+                                    query_sample_qids_path.c_str(), max_nq_per_node, index_build_params);
+        }
+        else
+        {
+            index.build(vector_bin_path.c_str(), data_num, index_build_params);
+        }
     }
     else
     {
@@ -392,6 +410,8 @@ inline void add_variant(py::module_ &m, const std::string &build_name, const std
     m.def(build_in_memory_name.c_str(), &build_in_memory_index<T>, py::arg("metric"), py::arg("data_file_path"),
           py::arg("index_output_path"), py::arg("graph_degree"), py::arg("complexity"), py::arg("alpha"),
           py::arg("num_threads"), py::arg("use_pq_build"), py::arg("num_pq_bytes"), py::arg("use_opq"),
+          py::arg("query_sample_bin_path") = "", py::arg("query_sample_qids_path") = "",
+          py::arg("max_nq_per_node") = "", py::arg("ood_lambda") = 0.75, py::arg("ood_build") = false,
           py::arg("label_file") = "", py::arg("universal_label") = "", py::arg("filter_complexity") = 0,
           py::arg("use_tags") = false);
 

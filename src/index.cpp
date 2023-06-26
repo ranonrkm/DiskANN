@@ -1869,10 +1869,10 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points_to_load,
-                                   const char *query_filename, const size_t num_query_points_to_load,
-                                   const char *qids_filename, const size_t max_nq_per_node,
-                                   const IndexWriteParameters &parameters, const std::vector<TagT> &tags)
+void Index<T, TagT, LabelT>::build_ood_index(const char *filename, const size_t num_points_to_load,
+                                            const char *query_filename, const size_t num_query_points_to_load,
+                                            const char *qids_filename, const size_t max_nq_per_node,
+                                            const IndexWriteParameters &parameters, const std::vector<TagT> &tags)
 {
     // for ood build
     _indexingOOD = parameters.ood_build;
@@ -1964,10 +1964,10 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points_to_load,
-                                   const char *query_filename, const size_t num_query_points_to_load,
-                                   const char *qids_filename, const size_t max_nq_per_node,
-                                   const IndexWriteParameters &parameters, const char *tag_filename)
+void Index<T, TagT, LabelT>::build_ood_index(const char *filename, const size_t num_points_to_load,
+                                            const char *query_filename, const size_t num_query_points_to_load,
+                                            const char *qids_filename, const size_t max_nq_per_node,
+                                            const IndexWriteParameters &parameters, const char *tag_filename)
 {
     std::vector<TagT> tags;
 
@@ -2006,9 +2006,9 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
             }
         }
     }
-    build(filename, num_points_to_load, 
-          query_filename, num_query_points_to_load, qids_filename, max_nq_per_node,
-          parameters, tags);
+    build_ood_index(filename, num_points_to_load, 
+                query_filename, num_query_points_to_load, qids_filename, max_nq_per_node,
+                parameters, tags);
 }
 
 template <typename T, typename TagT, typename LabelT>

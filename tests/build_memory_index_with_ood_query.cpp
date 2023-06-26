@@ -51,7 +51,7 @@ int build_in_memory_index(const diskann::Metric &metric, const std::string &data
     auto s = std::chrono::high_resolution_clock::now();
     if (label_file == "")
     {
-        index.build(data_path.c_str(), data_num, query_path.c_str(), query_num, qids_path.c_str(), max_nq_per_node, paras);
+        index.build_ood_index(data_path.c_str(), data_num, query_path.c_str(), query_num, qids_path.c_str(), max_nq_per_node, paras);
     }
     else
     {

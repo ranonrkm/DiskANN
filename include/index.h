@@ -109,7 +109,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                  const IndexWriteParameters &parameters,
                                  const std::vector<TagT> &tags = std::vector<TagT>());
 
-    DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
+    DISKANN_DLLEXPORT void build_ood_index(const char *filename, const size_t num_points_to_load,
                                  const char *query_filename, const size_t num_query_points_to_load,
                                  const char *qids_filename, const size_t max_nq_per_node,
                                  const IndexWriteParameters &parameters,
@@ -119,7 +119,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
                                  const IndexWriteParameters &parameters, const char *tag_filename);
 
-    DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
+    DISKANN_DLLEXPORT void build_ood_index(const char *filename, const size_t num_points_to_load,
                                  const char *query_filename, const size_t num_query_points_to_load,
                                  const char *qids_filename, const size_t max_nq_per_node,
                                  const IndexWriteParameters &parameters, const char *tag_filename);

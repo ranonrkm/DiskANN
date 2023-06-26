@@ -60,7 +60,6 @@ int build_and_search(const diskann::Metric &metric, const std::string &data_path
 
     if (use_adj_sample) 
     {
-        bool found_gt_ids = false;
         if (gt_path_prefix != std::string("null")) 
         {
             auto gt_ids_file = gt_path_prefix + "_indices.bin";
@@ -217,6 +216,8 @@ int main(int argc, char** argv)
             return 0;
         }
         po::notify(vm);
+        use_pq_build = (build_PQ_bytes > 0);
+        use_opq = vm["use_opq"].as<bool>();
     }
     catch (const std::exception &ex)
     {
