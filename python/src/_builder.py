@@ -311,3 +311,58 @@ def build_memory_index(
     )
 
     _write_index_metadata(index_prefix_path, vector_dtype_actual, dap_metric, num_points, dimensions)
+
+
+def update_memory_index(
+    index_data_path: str,
+    distance_metric: DistanceMetric,
+    index_directory: str,
+    prev_graph_degree: int,
+    graph_degree: int,
+    num_threads: int,
+    alpha: float = defaults.ALPHA,
+    vector_dtype: Optional[VectorDType] = None,
+    index_prefix: str = 'ann'
+):
+    dap_metric = _valid_metric(distance_metric)
+    _assert_is_positive_uint32(prev_graph_degree, "prev_graph_degree")
+    _assert_is_positive_uint32(graph_degree, "graph_degree")
+    _assert(alpha >= 1, "alpha must be >= 1, and realistically should be kept between [1.0, 2.0)")
+    _assert_is_nonnegative_uint32(num_threads, "num_threads")
+
+    prev_index_path = index_data_path
+    data_path = index_data_path + '.data'
+    index_path = Path(index_directory)
+    _assert(
+        index_path.exists() and index_path.is_dir(),
+        "index_directory must both exist and be a directory"
+    )
+
+    vector_bin_path, vector_dtype_actual = _valid_path_and_dtype(
+        data_path, vector_dtype, index_directory
+    )
+    print(vector_dtype_actual)
+
+    num_points, dimensions = vector_file_metadata(vector_bin_path)
+
+    if vector_dtype_actual == np.single:
+        _updater = _native_dap.update_in_memory_float_index
+    elif vector_dtype_actual == np.ubyte:
+        _updater = _native_dap.update_in_memory_uint8_index
+    else:
+        _updater = _native_dap.update_in_memory_int8_index
+
+    index_prefix_path = os.path.join(index_directory, index_prefix)
+
+    _updater(
+        distance_metric=dap_metric,
+        index_data_path=index_data_path,
+        index_output_path=index_prefix_path,
+        graph_degree=graph_degree,
+        prev_graph_degree=prev_graph_degree,
+        alpha=alpha,
+        num_threads=num_threads
+    )
+
+    _write_index_metadata(index_prefix_path, vector_dtype_actual, dap_metric, num_points, dimensions)
+    

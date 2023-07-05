@@ -379,6 +379,24 @@ void build_in_memory_index(const diskann::Metric &metric, const std::string &vec
     index.save(index_output_path.c_str());
 }
 
+template <typename T, typename TagT = IdT, typename LabelT = filterT>
+void update_index(const diskann::Metric &metric, const std::string &index_data_path, const std::string &index_output_path,
+                  const uint32_t graph_degree, const uint32_t prev_graph_degree,
+                  const float alpha, const uint32_t num_threads)
+{
+    diskann::IndexWriteParameters index_build_params = diskann::IndexWriteParametersBuilder(prev_graph_degree, graph_degree)
+                                                           .with_alpha(alpha)
+                                                           .with_saturate_graph(false)
+                                                           .with_num_threads(num_threads)
+                                                           .build();
+    size_t data_num, data_dim;
+    diskann::get_bin_metadata(index_data_path + ".data", data_num, data_dim);
+    diskann::Index<T, TagT, LabelT> index(metric, data_dim, data_num);
+
+    index.update_on_load(index_data_path.c_str(), index_build_params);
+    index.save(index_output_path.c_str());
+}
+
 template <typename T>
 inline void add_variant(py::module_ &m, const std::string &build_name, const std::string &class_name)
 {
@@ -393,6 +411,11 @@ inline void add_variant(py::module_ &m, const std::string &build_name, const std
           py::arg("data_file_path"), py::arg("index_output_path"), py::arg("graph_degree"), py::arg("complexity"),
           py::arg("alpha"), py::arg("num_threads"), py::arg("use_pq_build"), py::arg("num_pq_bytes"),
           py::arg("use_opq"), py::arg("filter_complexity") = 0, py::arg("use_tags") = false);
+
+    const std::string update_in_memory_name = "update_in_memory_" + build_name + "_index";
+    m.def(update_in_memory_name.c_str(), &update_index<T>, py::arg("distance_metric"),
+          py::arg("index_data_path"), py::arg("index_output_path"), py::arg("graph_degree"), py::arg("prev_graph_degree"),
+          py::arg("alpha"), py::arg("num_threads"));
 
     const std::string static_index = "StaticMemory" + class_name + "Index";
     py::class_<StaticInMemIndex<T>>(m, static_index.c_str())

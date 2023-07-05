@@ -110,6 +110,10 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                 const size_t num_points_to_load, IndexWriteParameters &parameters,
                                                 const std::vector<TagT> &tags = std::vector<TagT>());
 
+    // Load graph and update the adjacency list based on given indexing parameters.
+    DISKANN_DLLEXPORT void update_on_load(const char *filename, 
+                                 const IndexWriteParameters &parameters);
+
     DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
 
     // Get converted integer label from string to int map (_label_map)
@@ -279,6 +283,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Acquire exclusive _update_lock before calling
     void link(const IndexWriteParameters &parameters);
+
+    // given adjacency list, update graph based on new indexing parameters
+    void update_graph(const IndexWriteParameters &parameters);
 
     // Acquire exclusive _tag_lock and _delete_lock before calling
     int reserve_location();

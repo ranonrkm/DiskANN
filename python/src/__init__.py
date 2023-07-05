@@ -4,6 +4,7 @@
 from ._builder import (
     build_disk_index,
     build_memory_index,
+    update_memory_index,
     numpy_to_diskann_file,
 )
 from ._common import (

@@ -1594,6 +1594,74 @@ void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, cons
     }
 }
 
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::update_graph(const IndexWriteParameters &parameters)
+{
+    uint32_t num_threads = parameters.num_threads;
+    if (num_threads != 0)
+        omp_set_num_threads(num_threads);
+
+    _saturate_graph = parameters.saturate_graph;
+
+    _indexingQueueSize = parameters.search_list_size;
+    _filterIndexingQueueSize = parameters.filter_list_size;
+    _indexingRange = parameters.max_degree;
+    _indexingMaxC = parameters.max_occlusion_size;
+    _indexingAlpha = parameters.alpha;
+
+    /* visit_order is a vector that is initialized to the entire graph */
+    std::vector<uint32_t> visit_order;
+    std::vector<diskann::Neighbor> pool, tmp;
+    tsl::robin_set<uint32_t> visited;
+    visit_order.reserve(_nd + _num_frozen_pts);
+    for (uint32_t i = 0; i < (uint32_t)_nd; i++)
+    {
+        visit_order.emplace_back(i);
+    }
+
+    // If there are any frozen points, add them all.
+    for (uint32_t frozen = (uint32_t)_max_points; frozen < _max_points + _num_frozen_pts; frozen++)
+    {
+        visit_order.emplace_back(frozen);
+    }
+
+    diskann::Timer update_timer;
+
+#pragma omp parallel for schedule(dynamic, 2048)
+    for (int64_t node_ctr = 0; node_ctr < (int64_t)(visit_order.size()); node_ctr++)
+    {
+        auto node = visit_order[node_ctr];
+        if (_final_graph[node].size() > _indexingRange)
+        {
+            ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
+            auto scratch = manager.scratch_space();
+
+            tsl::robin_set<uint32_t> dummy_visited(0);
+            std::vector<Neighbor> dummy_pool(0);
+            std::vector<uint32_t> new_out_neighbors;
+
+            for (auto cur_nbr : _final_graph[node])
+            {
+                if (dummy_visited.find(cur_nbr) == dummy_visited.end() && cur_nbr != node)
+                {
+                    float dist = _data_store->get_distance(node, cur_nbr);
+                    dummy_pool.emplace_back(Neighbor(cur_nbr, dist));
+                    dummy_visited.insert(cur_nbr);
+                }
+            }
+            prune_neighbors(node, dummy_pool, new_out_neighbors, scratch);
+
+            _final_graph[node].clear();
+            for (auto id : new_out_neighbors)
+                _final_graph[node].emplace_back(id);
+        }
+    }
+    if (_nd > 0)
+    {
+        diskann::cout << "done. Update time: " << ((double)update_timer.elapsed() / (double)1000000) << "s" << std::endl;
+    }
+}
+
 // REFACTOR
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::set_start_points(const T *data, size_t data_count)
@@ -1945,6 +2013,13 @@ void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t nu
     {
         // clean_up_artifacts({labels_file_to_use, mem_labels_int_map_file}, {});
     }
+}
+
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::update_on_load(const char *filename, const IndexWriteParameters &parameters)
+{
+    load(filename, parameters.num_threads, parameters.search_list_size);
+    update_graph(parameters);
 }
 
 template <typename T, typename TagT, typename LabelT>
