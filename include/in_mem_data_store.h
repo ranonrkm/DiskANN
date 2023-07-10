@@ -33,6 +33,10 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
     // normalization that is required.
     virtual void populate_data(const data_t *vectors, const location_t num_pts) override;
     virtual void populate_data(const std::string &filename, const size_t offset) override;
+    virtual void populate_query_data_for_ood_build(const std::string &query_filename,
+                                                   const std::string &qids_filename, 
+                                                   const uint32_t max_nq_per_node,
+                                                   const float ood_lambda) override;
 
     virtual void extract_data_to_bin(const std::string &filename, const location_t num_pts) override;
 
@@ -48,6 +52,9 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
     virtual float get_distance(const location_t loc1, const location_t loc2) const override;
     virtual void get_distance(const data_t *query, const location_t *locations, const uint32_t location_count,
                               float *distances) const override;
+    virtual float get_distance(const data_t *query, const location_t loc1, const location_t loc2) const override;
+
+    virtual void revise_distances(const location_t loc, std::vector<Neighbor> &pool) override;
 
     virtual location_t calculate_medoid() const override;
 
@@ -67,7 +74,13 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
   private:
     data_t *_data = nullptr;
 
+    data_t *_train_query = nullptr;
+
+    std::vector<std::vector<location_t>> _qids;
+
     size_t _aligned_dim;
+
+    size_t _num_train_query = 0;
 
     // It may seem weird to put distance metric along with the data store class,
     // but this gives us perf benefits as the datastore can do distance
@@ -77,6 +90,9 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
 
     // in case we need to save vector norms for optimization
     std::shared_ptr<float[]> _pre_computed_norms;
+
+    float _ood_lambda = 0.5;
+    bool _ood_build = false;
 };
 
 } // namespace diskann

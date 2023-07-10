@@ -929,7 +929,8 @@ bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool searc
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     const T *query, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, InMemQueryScratch<T> *scratch,
-    bool use_filter, const std::vector<LabelT> &filter_label, bool search_invocation)
+    bool use_filter, const std::vector<LabelT> &filter_label, bool search_invocation,
+    const location_t insert_id)
 {
     std::vector<Neighbor> &expanded_nodes = scratch->pool();
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
@@ -1044,7 +1045,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             }
             else
             {
-                distance = _data_store->get_distance(aligned_query, id);
+                if (_indexingOOD)
+                {
+                    distance = _data_store->get_distance(aligned_query, insert_id, id);
+                }
+                else
+                {
+                    distance = _data_store->get_distance(aligned_query, id);
+                }
             }
             Neighbor nn = Neighbor(id, distance);
             best_L_nodes.insert(nn);
@@ -1136,7 +1144,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     _data_store->prefetch_vector(nextn);
                 }
 
-                dist_scratch.push_back(_data_store->get_distance(aligned_query, id));
+                if (_indexingOOD)
+                {
+                    dist_scratch.push_back(_data_store->get_distance(aligned_query, insert_id, id));
+                }
+                else
+                {
+                    dist_scratch.push_back(_data_store->get_distance(aligned_query, id));
+                }
             }
         }
         cmps += (uint32_t)id_scratch.size();
@@ -1162,7 +1177,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
     if (!use_filter)
     {
         _data_store->get_vector(location, scratch->aligned_query());
-        iterate_to_fixed_point(scratch->aligned_query(), Lindex, init_ids, scratch, false, unused_filter_label, false);
+        iterate_to_fixed_point(scratch->aligned_query(), Lindex, init_ids, scratch, false, unused_filter_label, false, location);
     }
     else
     {
@@ -1189,6 +1204,11 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
     if (pruned_list.size() > 0)
     {
         throw diskann::ANNException("ERROR: non-empty pruned_list passed", -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+
+    if (_indexingOOD)
+    {
+        _data_store->revise_distances(location, pool);
     }
 
     prune_neighbors(location, pool, pruned_list, scratch);
@@ -1943,6 +1963,106 @@ void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t nu
     {
         // clean_up_artifacts({labels_file_to_use, mem_labels_int_map_file}, {});
     }
+}
+
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::build_ood_index(const char *filename, const size_t num_points_to_load,
+                                            const char *query_filename, const size_t num_query_points_to_load,
+                                            const char *qids_filename, 
+                                            const IndexWriteParameters &parameters, const std::vector<TagT> &tags)
+{
+    // for ood build
+    _indexingOOD = parameters.ood_build;
+    _indexingLambda = parameters.ood_lambda;
+    _indexingMaxQ = parameters.max_nq_per_node;
+    if (_indexingOOD && _indexingLambda > 0 && _indexingMaxQ > 0) 
+    {
+        assert(query_filename != std::string("null") && qids_filename != std::string("null"));
+
+        size_t query_file_dim, query_file_num_points, qids_file_dim, qids_file_num_points;
+        diskann::cout << "Building graph with OOD query information" << std::endl;
+        
+        if (!file_exists(query_filename))
+        {
+            std::stringstream stream;
+            stream << "ERROR: query data file " << query_filename << " does not exist." << std::endl;
+            diskann::cerr << stream.str() << std::endl;
+            throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
+        diskann::get_bin_metadata(query_filename, query_file_num_points, query_file_dim);
+
+        if (query_file_dim != _dim)
+        {
+            std::stringstream stream;
+            stream << "ERROR: Driver requests loading " << _dim << " dimension,"
+                << "but file has " << query_file_dim << " dimension." << std::endl;
+            diskann::cerr << stream.str() << std::endl;
+            throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
+
+        if (!file_exists(qids_filename))
+        {
+            std::stringstream stream;
+            stream << "ERROR: query data file " << qids_filename << " does not exist." << std::endl;
+            diskann::cerr << stream.str() << std::endl;
+            throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
+        diskann::get_bin_metadata(qids_filename, qids_file_num_points, qids_file_dim);
+
+        assert (query_file_num_points == qids_file_num_points);
+
+        _data_store->populate_query_data_for_ood_build(query_filename, qids_filename, _indexingMaxQ, _indexingLambda);
+    }
+    
+    return build(filename, num_points_to_load, parameters, tags);
+}
+
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::build_ood_index(const char *filename, const size_t num_points_to_load,
+                                            const char *query_filename, const size_t num_query_points_to_load,
+                                            const char *qids_filename, 
+                                            const IndexWriteParameters &parameters, const char *tag_filename)
+{
+    std::vector<TagT> tags;
+
+    if (_enable_tags)
+    {
+        std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+        if (tag_filename == nullptr)
+        {
+            throw ANNException("Tag filename is null, while _enable_tags is set", -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
+        else
+        {
+            if (file_exists(tag_filename))
+            {
+                diskann::cout << "Loading tags from " << tag_filename << " for vamana index build" << std::endl;
+                TagT *tag_data = nullptr;
+                size_t npts, ndim;
+                diskann::load_bin(tag_filename, tag_data, npts, ndim);
+                if (npts < num_points_to_load)
+                {
+                    std::stringstream sstream;
+                    sstream << "Loaded " << npts << " tags, insufficient to populate tags for " << num_points_to_load
+                            << "  points to load";
+                    throw diskann::ANNException(sstream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+                }
+                for (size_t i = 0; i < num_points_to_load; i++)
+                {
+                    tags.push_back(tag_data[i]);
+                }
+                delete[] tag_data;
+            }
+            else
+            {
+                throw diskann::ANNException(std::string("Tag file") + tag_filename + " does not exist", -1, __FUNCSIG__,
+                                            __FILE__, __LINE__);
+            }
+        }
+    }
+    build_ood_index(filename, num_points_to_load, 
+                query_filename, num_query_points_to_load, qids_filename, 
+                parameters, tags);
 }
 
 template <typename T, typename TagT, typename LabelT>

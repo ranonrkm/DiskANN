@@ -7,6 +7,9 @@ set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
 add_executable(build_memory_index build_memory_index.cpp)
 target_link_libraries(build_memory_index ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::program_options)
 
+add_executable(build_memory_index_with_ood_query build_memory_index_with_ood_query.cpp)
+target_link_libraries(build_memory_index_with_ood_query ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::program_options)
+
 add_executable(build_stitched_index build_stitched_index.cpp)
 target_link_libraries(build_stitched_index ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::program_options)
 

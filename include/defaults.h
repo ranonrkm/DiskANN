@@ -20,5 +20,8 @@ const uint32_t MAX_DEGREE = 64;
 const uint32_t BUILD_LIST_SIZE = 100;
 const uint32_t SATURATE_GRAPH = false;
 const uint32_t SEARCH_LIST_SIZE = 100;
+const uint32_t MAX_NQ_PER_NODE = 5;
+const float    OOD_LAMBDA = 0.5;
+const bool     OOD_BUILD = false;
 } // namespace defaults
 } // namespace diskann
