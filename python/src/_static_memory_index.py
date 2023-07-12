@@ -176,3 +176,36 @@ class StaticMemoryIndex:
             complexity=complexity,
             num_threads=num_threads,
         )
+
+    def batch_search_binned(
+        self, queries: np.ndarray, k_neighbors: int, complexity: int, 
+        num_bins: int, chunk_size: int, num_threads: int
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        _assert(len(queries.shape) == 2, "queries must must be 2-d np array")
+        _assert(
+            queries.dtype == self._vector_dtype,
+            f"StaticMemoryIndex was built expecting a dtype of {self._vector_dtype}, but the query vectors are of dtype "
+            f"{queries.dtype}",
+        )
+        _assert_is_positive_uint32(k_neighbors, "k_neighbors")
+        _assert_is_positive_uint32(complexity, "complexity")
+        _assert_is_positive_uint32(num_bins, "num_bins")
+        _assert_is_positive_uint32(chunk_size, "chunk_size")
+        _assert_is_nonnegative_uint32(num_threads, "num_threads")
+
+        if k_neighbors > complexity:
+            warnings.warn(
+                f"k_neighbors={k_neighbors} asked for, but list_size={complexity} was smaller. Increasing {complexity} to {k_neighbors}"
+            )
+            complexity = k_neighbors
+
+        num_queries, dim = queries.shape
+        return self._index.batch_search_binned(
+            queries=queries,
+            num_queries=num_queries,
+            knn=k_neighbors,
+            complexity=complexity,
+            num_bins=num_bins,
+            chunk_size=chunk_size,
+            num_threads=num_threads,
+        )

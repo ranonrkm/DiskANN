@@ -2,6 +2,7 @@
 # Licensed under the MIT license.
 
 import numpy as np
+import numpy.typing as npt
 from scipy.cluster.vq import vq, kmeans2
 from typing import Tuple
 from time import perf_counter
@@ -27,17 +28,26 @@ class timer:
 
 
 def numpy_to_bin(array, out_file):
-    shape = np.shape(array)
-    npts = shape[0].astype(np.uint32)
-    ndims = shape[1].astype(np.uint32)
+    npts, ndims = np.shape(array)
     f = open(out_file, "wb")
-    f.write(npts.tobytes())
-    f.write(ndims.tobytes())
+    f.write(npts.to_bytes(4, "little"))
+    f.write(ndims.to_bytes(4, "little"))
     f.write(array.tobytes())
     f.close()
 
+def bin_to_sample(dtype, in_file, out_file, frac=0.01):
+    npts, ndims = get_bin_metadata(in_file)
+    array = np.memmap(in_file, dtype=dtype, mode='r', offset=8).reshape(npts, ndims)
+    nsample = int(npts * frac)
+    random_ids = np.random.choice(npts, nsample, replace=False)
+    sub_array = array[random_ids]
+    with open(out_file, "wb") as f:
+        f.write(nsample.to_bytes(4, "little"))
+        f.write(ndims.tobytes())
+        f.write(sub_array.tobytes())
+        f.close()        
 
-def read_gt_file(gt_file) -> Tuple[np.ndarray[int], np.ndarray[float]]:
+def read_gt_file(gt_file) -> Tuple[npt.NDArray[int], npt.NDArray[float]]:
     """
     Return ids and distances to queries
     """
@@ -45,15 +55,16 @@ def read_gt_file(gt_file) -> Tuple[np.ndarray[int], np.ndarray[float]]:
     ids = np.fromfile(file=gt_file, dtype=np.uint32, offset=8, count=nq * K).reshape(
         nq, K
     )
-    dists = np.fromfile(
-        file=gt_file, dtype=np.float32, offset=8 + nq * K * 4, count=nq * K
-    ).reshape(nq, K)
+    # dists = np.fromfile(
+    #     file=gt_file, dtype=np.float32, offset=8 + nq * K * 4, count=nq * K
+    # ).reshape(nq, K)
+    dists = None
     return ids, dists
 
 
 def calculate_recall(
-    result_set_indices: np.ndarray[int],
-    truth_set_indices: np.ndarray[int],
+    result_set_indices: npt.NDArray[int],
+    truth_set_indices: npt.NDArray[int],
     recall_at: int = 5,
 ) -> float:
     """
@@ -73,7 +84,7 @@ def calculate_recall(
     return found / (result_set_indices.shape[0] * recall_at)
 
 
-def calculate_recall_from_gt_file(K: int, ids: np.ndarray[int], gt_file: str) -> float:
+def calculate_recall_from_gt_file(K: int, ids: npt.NDArray[int], gt_file: str) -> float:
     """
     Calculate recall from ids returned from search and those read from file
     """
@@ -83,7 +94,7 @@ def calculate_recall_from_gt_file(K: int, ids: np.ndarray[int], gt_file: str) ->
 
 def cluster_and_permute(
     dtype_str, npts, ndims, data, num_clusters
-) -> Tuple[np.ndarray[int], np.ndarray[int]]:
+) -> Tuple[npt.NDArray[int], npt.NDArray[int]]:
     """
     Cluster the data and return permutation of row indices
     that would group indices of the same cluster together

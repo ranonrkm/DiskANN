@@ -1202,7 +1202,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
     if (!use_filter)
     {
         _data_store->get_vector(location, scratch->aligned_query());
-        iterate_to_fixed_point(scratch->aligned_query(), Lindex, init_ids, scratch, false, unused_filter_label, false, location);
+        iterate_to_fixed_point(scratch->aligned_query(), Lindex, init_ids, scratch, false, unused_filter_label, false);
     }
     else
     {
@@ -1231,7 +1231,10 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
         throw diskann::ANNException("ERROR: non-empty pruned_list passed", -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    _data_store->revise_distances(location, pool);
+    if (_indexingOOD)
+    {
+        _data_store->revise_distances(location, pool);
+    }
 
     prune_neighbors(location, pool, pruned_list, scratch);
 
@@ -1871,13 +1874,14 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::build_ood_index(const char *filename, const size_t num_points_to_load,
                                             const char *query_filename, const size_t num_query_points_to_load,
-                                            const char *qids_filename, const size_t max_nq_per_node,
+                                            const char *qids_filename, 
                                             const IndexWriteParameters &parameters, const std::vector<TagT> &tags)
 {
     // for ood build
     _indexingOOD = parameters.ood_build;
     _indexingLambda = parameters.ood_lambda;
-    if (_indexingOOD && _indexingLambda > 0) 
+    _indexingMaxQ = parameters.max_nq_per_node;
+    if (_indexingOOD && _indexingLambda > 0 && _indexingMaxQ > 0) 
     {
         assert(query_filename != std::string("null") && qids_filename != std::string("null"));
 
@@ -1913,7 +1917,7 @@ void Index<T, TagT, LabelT>::build_ood_index(const char *filename, const size_t 
 
         assert (query_file_num_points == qids_file_num_points);
 
-        _data_store->populate_query_data_for_ood_build(query_filename, qids_filename, max_nq_per_node, _indexingLambda);
+        _data_store->populate_query_data_for_ood_build(query_filename, qids_filename, _indexingMaxQ, _indexingLambda);
     }
     
     return build(filename, num_points_to_load, parameters, tags);
@@ -1966,7 +1970,7 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::build_ood_index(const char *filename, const size_t num_points_to_load,
                                             const char *query_filename, const size_t num_query_points_to_load,
-                                            const char *qids_filename, const size_t max_nq_per_node,
+                                            const char *qids_filename, 
                                             const IndexWriteParameters &parameters, const char *tag_filename)
 {
     std::vector<TagT> tags;
@@ -2007,7 +2011,7 @@ void Index<T, TagT, LabelT>::build_ood_index(const char *filename, const size_t 
         }
     }
     build_ood_index(filename, num_points_to_load, 
-                query_filename, num_query_points_to_load, qids_filename, max_nq_per_node,
+                query_filename, num_query_points_to_load, qids_filename, 
                 parameters, tags);
 }
 

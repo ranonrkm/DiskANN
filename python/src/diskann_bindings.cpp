@@ -326,6 +326,72 @@ template <class T> struct StaticInMemIndex
 
         return std::make_pair(ids, dists);
     }
+
+    auto batch_search_binned(py::array_t<T, py::array::c_style | py::array::forcecast> &queries, const uint64_t num_queries,
+                             const uint64_t knn, const uint64_t complexity, const uint64_t num_bins, const uint64_t chunk_size, 
+                             const int num_threads)
+    {
+        const uint32_t _num_threads = num_threads != 0 ? num_threads : omp_get_num_threads();
+        if (num_bins < 2)
+        {
+            return batch_search(queries, num_queries, knn, complexity, num_threads);
+        }
+            
+        std::vector<unsigned> bins(num_bins - 1);
+        for (int64_t i = 1; i < (int64_t)num_bins; i++)
+        {
+            bins[i-1] = chunk_size * i;
+        }
+        auto knn_bin = knn / num_bins;
+
+        py::array_t<unsigned> ids({num_bins, num_queries, knn_bin});
+        py::array_t<float> dists({num_bins, num_queries, knn_bin});
+        auto ids_buffer_info = ids.request();
+        unsigned *ids_ptr = static_cast<unsigned*>(ids_buffer_info.ptr);
+        auto dists_buffer_info = dists.request();
+        float *dists_ptr = static_cast<float*>(dists_buffer_info.ptr);
+
+        // initialize all query id list and dist list
+        std::fill(ids_ptr, ids_ptr+ids.size(), chunk_size);
+
+        omp_set_num_threads(_num_threads);
+
+#pragma omp parallel for schedule(dynamic, 1)
+        for (int64_t i = 0; i < (int64_t)num_queries; i++)
+        {
+            unsigned curr_ids[complexity];
+            float curr_dists[complexity];
+
+            _index->search(queries.data(i), complexity, complexity, curr_ids, curr_dists);
+
+            unsigned chunk_pos[num_bins] = {0};
+            size_t filled = 0;
+            for (int64_t j = 0; j < (int64_t)complexity; j++)
+            {
+                if (filled == num_bins)
+                    break;
+                auto id = curr_ids[j];
+                unsigned chunk_id = 0;
+                if (id >= bins[0])
+                {
+                    auto it = std::upper_bound(bins.begin(), bins.end(), id);
+                    chunk_id = std::distance(bins.begin(), it);
+                }
+
+                auto& pos = chunk_pos[chunk_id];
+                if (pos < knn_bin)
+                {
+                    size_t offset = (chunk_id * num_queries + i) * knn_bin;
+                    ids_ptr[offset + pos] = (chunk_id > 0) ? (id - bins[chunk_id - 1]) : id;
+                    dists_ptr[offset + pos] = curr_dists[j];
+                    if (++pos == knn_bin)
+                        filled++;
+                }
+            }
+        }
+
+        return std::make_pair(ids, dists);
+    }
 };
 
 template <typename T>
@@ -361,6 +427,7 @@ void build_in_memory_index(const diskann::Metric &metric, const std::string &vec
                                                            .with_alpha(alpha)
                                                            .with_saturate_graph(false)
                                                            .with_ood_build(ood_build)
+                                                           .with_max_nq_per_node(max_nq_per_node)
                                                            .with_ood_lambda(ood_lambda)
                                                            .with_num_threads(num_threads)
                                                            .build();
@@ -372,10 +439,11 @@ void build_in_memory_index(const diskann::Metric &metric, const std::string &vec
     {
         if (ood_build)
         {
+            diskann::cout << "using sample queries for ood build" << std::endl;
             diskann::get_bin_metadata(query_sample_bin_path, query_num, query_dim);
             assert (query_dim == data_dim);
             index.build_ood_index(vector_bin_path.c_str(), data_num, query_sample_bin_path.c_str(), query_num, 
-                                    query_sample_qids_path.c_str(), max_nq_per_node, index_build_params);
+                                    query_sample_qids_path.c_str(), index_build_params);
         }
         else
         {
@@ -411,7 +479,7 @@ inline void add_variant(py::module_ &m, const std::string &build_name, const std
           py::arg("index_output_path"), py::arg("graph_degree"), py::arg("complexity"), py::arg("alpha"),
           py::arg("num_threads"), py::arg("use_pq_build"), py::arg("num_pq_bytes"), py::arg("use_opq"),
           py::arg("query_sample_bin_path") = "", py::arg("query_sample_qids_path") = "",
-          py::arg("max_nq_per_node") = "", py::arg("ood_lambda") = 0.75, py::arg("ood_build") = false,
+          py::arg("max_nq_per_node") = 5, py::arg("ood_lambda") = 0.75, py::arg("ood_build") = false,
           py::arg("label_file") = "", py::arg("universal_label") = "", py::arg("filter_complexity") = 0,
           py::arg("use_tags") = false);
 
@@ -426,7 +494,9 @@ inline void add_variant(py::module_ &m, const std::string &build_name, const std
              py::arg("initial_search_complexity"))
         .def("search", &StaticInMemIndex<T>::search, py::arg("query"), py::arg("knn"), py::arg("complexity"))
         .def("batch_search", &StaticInMemIndex<T>::batch_search, py::arg("queries"), py::arg("num_queries"),
-             py::arg("knn"), py::arg("complexity"), py::arg("num_threads"));
+             py::arg("knn"), py::arg("complexity"), py::arg("num_threads"))
+        .def("batch_search_binned", &StaticInMemIndex<T>::batch_search_binned, py::arg("queries"), py::arg("num_queries"),
+             py::arg("knn"), py::arg("complexity"), py::arg("num_bins"), py::arg("chunk_size"), py::arg("num_threads"));
 
     const std::string dynamic_index = "DynamicMemory" + class_name + "Index";
     py::class_<DynamicInMemIndex<T>>(m, dynamic_index.c_str())
@@ -504,6 +574,10 @@ PYBIND11_MODULE(_diskannpy, m)
     default_values.attr("USE_PQ_BUILD") = false;
     default_values.attr("NUM_PQ_BYTES") = (uint32_t)0;
     default_values.attr("USE_OPQ") = false;
+    default_values.attr("MAX_NQ_PER_NODE") = diskann::defaults::MAX_NQ_PER_NODE;
+    default_values.attr("OOD_LAMBDA") = diskann::defaults::OOD_LAMBDA;
+    default_values.attr("OOD_BUILD") = false;
+    
 
     add_variant<float>(m, "float", "Float");
     add_variant<uint8_t>(m, "uint8", "UInt8");

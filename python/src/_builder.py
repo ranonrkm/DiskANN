@@ -64,7 +64,51 @@ def _valid_path_and_dtype(
         vector_dtype_actual = vector_dtype
     return vector_bin_path, vector_dtype_actual
 
+def _valid_ood_build_metadata(
+    data: Union[str, np.ndarray], ids: Union[str, np.ndarray], vector_dtype: Optional[VectorDType], index_path: str,
+) -> Tuple[str, str, VectorDType]:
+    if isinstance(data, np.ndarray):
+        _assert_2d(data, "query_data")
+        _assert_dtype(data.dtype, "query_data.dtype")
 
+        query_sample_bin_path = os.path.join(index_path, "query_sample_data.bin") 
+        if Path(query_sample_bin_path).exists():
+            raise ValueError(
+                f"The path {query_sample_bin_path} already exists. Remove it and try again."
+            )
+        with open(query_sample_bin_path, "wb") as temp_query_bin:
+            numpy_to_diskann_file(data, temp_query_bin)
+        query_dtype_actual = data.dtype
+    else:
+        query_sample_bin_path = data
+        _assert(
+            Path(data).exists() and Path(data).is_file(),
+            "if data is of type `str`, it must both exist and be a file",
+        )
+        query_dtype_actual = vector_dtype
+
+    if isinstance(ids, np.ndarray):
+        _assert_2d(ids, "qids")
+        assert ids.dtype == np.uint32, "qids should have dtype np.uint32"
+
+        qids_sample_bin_path = os.path.join(index_path, "qids_sample.bin")
+        if Path(qids_sample_bin_path).exists():
+            raise ValueError(
+                f"The path {qids_sample_bin_path} already exists. Remove it and try again."
+            )
+        with open(qids_sample_bin_path, "wb") as temp_qids_bin:
+            temp_qids_bin.write(ids.shape[0].to_bytes(4, "little"))
+            temp_qids_bin.write(ids.shape[1].to_bytes(4, "little"))
+            temp_qids_bin.write(ids.tobytes())
+    else:
+        qids_sample_bin_path = ids
+        _assert(
+            Path(ids).exists() and Path(ids).is_file(),
+            "if data is of type `str`, it must both exist and be a file",
+        )
+    return query_sample_bin_path, qids_sample_bin_path, query_dtype_actual
+    
+        
 def build_disk_index(
     data: Union[str, np.ndarray],
     metric: Literal["l2", "mips"],
@@ -180,6 +224,11 @@ def build_memory_index(
     num_pq_bytes: int = defaults.NUM_PQ_BYTES,
     use_opq: bool = defaults.USE_OPQ,
     vector_dtype: Optional[VectorDType] = None,
+    query_sample: Union[str, np.ndarray] = None,
+    qids_sample: Union[str, np.array] = None,
+    max_nq_per_node: int = defaults.MAX_NQ_PER_NODE,
+    ood_lambda: float = defaults.OOD_LAMBDA,
+    ood_build: bool = defaults.OOD_BUILD,
     label_file: str = "",
     universal_label: str = "",
     filter_complexity: int = defaults.FILTER_COMPLEXITY,
@@ -244,9 +293,29 @@ def build_memory_index(
         "index_directory must both exist and be a directory",
     )
 
+    if ood_build:
+        _assert(
+            (isinstance(query_sample, str) and vector_dtype is not None)
+            or isinstance(query_sample, np.ndarray),
+            "query_sample is required if ood_build is set True",
+        )
+        _assert(
+            isinstance(qids_sample, str)
+            or isinstance(qids_sample, np.ndarray),
+            "qids_sample is required if ood_build is set True",
+        )
+        
     vector_bin_path, vector_dtype_actual = _valid_path_and_dtype(
         data, vector_dtype, index_directory
     )
+
+    query_sample_bin_path = ""
+    query_sample_qids_path = ""
+    if ood_build:
+        query_sample_bin_path, query_sample_qids_path, query_dtype_actual = _valid_ood_build_metadata(
+            query_sample, qids_sample, vector_dtype, index_directory
+        )
+        assert query_dtype_actual == vector_dtype_actual, "query_sample and data should have same dtype"
 
     if vector_dtype_actual == np.single:
         _builder = _native_dap.build_in_memory_float_index
@@ -266,6 +335,11 @@ def build_memory_index(
         use_pq_build=use_pq_build,
         num_pq_bytes=num_pq_bytes,
         use_opq=use_opq,
+        query_sample_bin_path=query_sample_bin_path,
+        query_sample_qids_path=query_sample_qids_path,
+        max_nq_per_node=max_nq_per_node,
+        ood_lambda=ood_lambda,
+        ood_build=ood_build,
         label_file=label_file,
         universal_label=universal_label,
         filter_complexity=filter_complexity

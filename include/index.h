@@ -111,7 +111,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     DISKANN_DLLEXPORT void build_ood_index(const char *filename, const size_t num_points_to_load,
                                  const char *query_filename, const size_t num_query_points_to_load,
-                                 const char *qids_filename, const size_t max_nq_per_node,
+                                 const char *qids_filename, 
                                  const IndexWriteParameters &parameters,
                                  const std::vector<TagT> &tags = std::vector<TagT>());
 
@@ -121,7 +121,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     DISKANN_DLLEXPORT void build_ood_index(const char *filename, const size_t num_points_to_load,
                                  const char *query_filename, const size_t num_query_points_to_load,
-                                 const char *qids_filename, const size_t max_nq_per_node,
+                                 const char *qids_filename, 
                                  const IndexWriteParameters &parameters, const char *tag_filename);
 
     // Batch build from a data array, which must pad vectors to aligned_dim
@@ -388,6 +388,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     uint32_t _indexingMaxC;
     float _indexingAlpha;
     float _indexingLambda;
+    uint32_t _indexingMaxQ;
 
     // Query scratch data structures
     ConcurrentQueue<InMemQueryScratch<T> *> _query_scratch;

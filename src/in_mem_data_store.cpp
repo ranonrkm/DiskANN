@@ -150,7 +150,7 @@ template <typename data_t> void InMemDataStore<data_t>::populate_data(const std:
 
 template <typename data_t> void InMemDataStore<data_t>::populate_query_data_for_ood_build(const std::string &query_filename, 
                                                                             const std::string &qids_filename,
-                                                                            const size_t max_nq_per_node,
+                                                                            const uint32_t max_nq_per_node,
                                                                             const float ood_lambda)
 {
     size_t npts, ndim, qids_file_num_points, qids_file_dim;
@@ -259,7 +259,7 @@ float InMemDataStore<data_t>::get_distance(const data_t *query, const location_t
 }
 
 template <typename data_t>
-void InMemDataStore<data_t>::revise_distances(const location_t &loc, std::vector<Neighbor> &pool)
+void InMemDataStore<data_t>::revise_distances(const location_t loc, std::vector<Neighbor> &pool)
 {
     if (!_ood_build || _qids[loc].empty())
         return;

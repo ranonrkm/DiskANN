@@ -35,7 +35,7 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
     virtual void populate_data(const std::string &filename, const size_t offset) override;
     virtual void populate_query_data_for_ood_build(const std::string &query_filename,
                                                    const std::string &qids_filename, 
-                                                   const size_t max_nq_per_node,
+                                                   const uint32_t max_nq_per_node,
                                                    const float ood_lambda) override;
 
     virtual void extract_data_to_bin(const std::string &filename, const location_t num_pts) override;
@@ -54,7 +54,7 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
                               float *distances) const override;
     virtual float get_distance(const data_t *query, const location_t loc1, const location_t loc2) const override;
     
-    virtual void revise_distances(const location_t &loc, std::vector<Neighbor> &pool);
+    virtual void revise_distances(const location_t loc, std::vector<Neighbor> &pool) override;
 
     virtual location_t calculate_medoid() const override;
 
