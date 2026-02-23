@@ -375,3 +375,8 @@ venv*/**
 *.swp
 
 gperftools
+# Agent runtime artifacts (auto-generated)
+bash_commands/
+todos.json
+.is_sandbox_shared_folder
+.gitignore
